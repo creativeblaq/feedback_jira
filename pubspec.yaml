@@ -1,6 +1,7 @@
 name: feedback_jira
 description: A Flutter package for getting better feedback. It allows the user to give interactive feedback directly in the app and upload it as a ticket in Jira Software
 version: 0.0.1
+repository: https://github.com/encalv/feedback_jira
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
