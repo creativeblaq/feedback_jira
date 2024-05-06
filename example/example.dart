@@ -54,9 +54,8 @@ class _MyHomePageState extends State<MyHomePage> {
             ElevatedButton(
               onPressed: () {
                 BetterFeedback.of(context).showAndUploadToJira(
-                  domainName: 'enzo-calvino',
-                  apiToken:
-                      'ZW56b2NhbHZpbm8zQGdtYWlsLmNvbTpBVEFUVDN4RmZHRjBIVEZGNUxwanY4WGp3dF8zb0FPTmhMWDNJSElSTFkzTTB1a2VYT0RPYmdtT2RKNThwS2dKZm1BeUdEbFFfTWV2R2xJa3E5V3pxWF96TWo0NnZIdnhLSFAtWjVjcjluNVRBX2dDYzNvUEZsaFlpTzVTMGVHZDdOdHJyVWRnUDNXQ0o3SjNUZjdxVnRwQy1Bc2ZiVXlob1EtYncwcUlWenBSMlFYQS11YjFmZVU9ODhGNzg2QzI=',
+                  domainName: 'domain-name',
+                  apiToken: 'apiToken',
                 );
               },
               child: const Text('Show Feedback view'),
