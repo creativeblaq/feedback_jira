@@ -15,26 +15,43 @@ and the Flutter guide for
 
 ## 🚀 Getting Started
 
-### Features
+### Setup
 
-TODO: List what your package can do. Maybe include images, gifs, or videos.
+First, you will need to add `feedback_jira` to your `pubspec.yaml`.
 
-### Getting started
-
-TODO: List prerequisites and provide or point to information on how to
-start using the package.
-
-### Usage
-
-TODO: Include short and useful examples for package users. Add longer examples
-to `/example` folder.
-
-```dart
-const like = 'sample';
+```yaml
+dependencies:
+  flutter:
+    sdk: flutter
+  feedback_jira: x.y.z # use the latest version found on pub.dev
 ```
 
-### Additional information
+Then, run `flutter pub get` in your terminal.
 
-TODO: Tell users more about the package: where to find more information, how to
-contribute to the package, how to file issues, what response they can expect
-from the package authors, and more.
+### Use it
+
+Just wrap your app in a `BetterFeedback` widget.
+To show the feedback view just call `BetterFeedback.of(context).showAndUploadToJira(...);`.
+The callback gets called when the user submits his feedback.
+
+```dart
+import 'package:feedback/feedback.dart';
+import 'package:flutter/material.dart';
+
+void main() {
+  runApp(
+    BetterFeedback(
+      child: const MyApp(),
+    ),
+  );
+}
+```
+
+Provide a way to show the feedback panel by calling
+```dart
+BetterFeedback.of(context).showAndUploadToJira(
+    domainName: 'domainName',
+    apiToken: 'api-token',
+);
+```
+Provide a way to hide the feedback panel by calling  `BetterFeedback.of(context).hide();` 
