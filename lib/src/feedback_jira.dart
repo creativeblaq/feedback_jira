@@ -52,7 +52,7 @@ OnFeedbackCallback uploadToJira({
   http.Client? client,
 }) {
   final httpClient = client ?? http.Client();
-  final baseUrl = 'https://$domainName..atlassian.net';
+  final baseUrl = 'https://$domainName.atlassian.net';
 
   return (UserFeedback feedback) async {
     final body = customBody ??
