@@ -70,7 +70,7 @@ OnFeedbackCallback uploadToJira({
           },
           'update': {},
         };
-    final issueUri = Uri.https(baseUrl.replaceAll('https://', '')., '/rest/api/2/issue');
+    final issueUri = Uri.https(baseUrl.replaceAll('https://', ''), '/rest/api/2/issue');
 
     try {
       final response = await httpClient.post(
