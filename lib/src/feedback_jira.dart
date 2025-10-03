@@ -34,6 +34,7 @@ extension BetterFeedbackX on FeedbackController {
     required String jiraEmail,
     bool includeDeviceDetails = true,
     bool includeScreenshot = true,
+    Map<String, dynamic> metadata = const {},
     http.Client? client,
     Function(bool isShowing)? onShow,
   }) {
@@ -43,6 +44,7 @@ extension BetterFeedbackX on FeedbackController {
       jiraEmail: jiraEmail,
       includeDeviceDetails: includeDeviceDetails,
       includeScreenshot: includeScreenshot,
+      customBody: metadata,
       client: client,
     ));
     onShow?.call(isVisible);
@@ -87,7 +89,8 @@ OnFeedbackCallback uploadToJira({
   final baseUrl = '$domainName.atlassian.net';
 
   return (UserFeedback feedback) async {
-    final deviceDetailsMap = includeDeviceDetails ? await getDeviceDetails() : <String, dynamic>{};
+    final deviceDetailsMap =
+        includeDeviceDetails ? await getDeviceDetails() : <String, dynamic>{};
 
     var contentMap = <Map<String, dynamic>>[];
     contentMap.add({
@@ -115,21 +118,35 @@ OnFeedbackCallback uploadToJira({
       });
     }
 
+    if (customBody != null) {
+      contentMap.add({"type": "rule"});
+      contentMap.add({
+        "type": "heading",
+        "attrs": {"level": 3},
+        "content": [
+          {"type": "text", "text": "Custom body"}
+        ]
+      });
+
+      customBody.forEach((key, value) {
+        contentMap.add(_createParagraph(key, value));
+      });
+    }
+
     Map<String, dynamic> descriptionMap = {
       "type": "doc",
       "version": 1,
       "content": contentMap,
     };
 
-    final body = customBody ??
-        {
-          "fields": {
-            "summary": feedback.text.split('.')[0],
-            "issuetype": {"id": "10002"},
-            "project": {"id": "10000"},
-            "description": descriptionMap
-          }
-        };
+    final body = {
+      "fields": {
+        "summary": feedback.text.split('.')[0],
+        "issuetype": {"id": "10002"},
+        "project": {"id": "10000"},
+        "description": descriptionMap
+      }
+    };
     //final issueUri = Uri.https(baseUrl.replaceAll('https://', ''), '/rest/api/2/issue');
     final issueUri = Uri.https(baseUrl, '/rest/api/3/issue');
     final String basicAuth =
@@ -157,14 +174,15 @@ OnFeedbackCallback uploadToJira({
           final attachmentsUri =
               Uri.https(baseUrl, '/rest/api/3/issue/$ticketId/attachments');
           if (includeScreenshot && feedback.screenshot.isNotEmpty) {
-            await uploadAttachmentFromUint8List(
-                attachmentsUri, basicAuth, feedback.screenshot, 'screenshot.png');
+            await uploadAttachmentFromUint8List(attachmentsUri, basicAuth,
+                feedback.screenshot, 'screenshot.png');
           }
         } catch (e) {
           rethrow;
         }
       } else {
-        throw HttpException('Jira issue creation failed with status $statusCode');
+        throw HttpException(
+            'Jira issue creation failed with status $statusCode');
       }
     } catch (e) {
       rethrow;
@@ -193,7 +211,8 @@ Future<String> uploadAttachmentFromUint8List(
 
   var response = await request.send();
   if (kDebugMode) {
-    debugPrint('Attachment response: ${response.statusCode} ${response.reasonPhrase}');
+    debugPrint(
+        'Attachment response: ${response.statusCode} ${response.reasonPhrase}');
   }
 
   if (response.statusCode >= 200 && response.statusCode < 400) {
