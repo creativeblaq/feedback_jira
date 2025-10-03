@@ -37,6 +37,7 @@ extension BetterFeedbackX on FeedbackController {
     Map<String, dynamic> metadata = const {},
     http.Client? client,
     Function(bool isShowing)? onShow,
+    Function(bool isSubmitting)? onSubmit,
   }) {
     show(uploadToJira(
       domainName: domainName,
@@ -46,6 +47,7 @@ extension BetterFeedbackX on FeedbackController {
       includeScreenshot: includeScreenshot,
       customBody: metadata,
       client: client,
+      onSubmit: onSubmit,
     ));
     onShow?.call(isVisible);
   }
@@ -84,6 +86,7 @@ OnFeedbackCallback uploadToJira({
   bool includeScreenshot = true,
   Map<String, dynamic>? customBody,
   http.Client? client,
+  Function(bool isSubmitting)? onSubmit,
 }) {
   final httpClient = client ?? http.Client();
   final baseUrl = '$domainName.atlassian.net';
@@ -153,6 +156,7 @@ OnFeedbackCallback uploadToJira({
         'Basic ${base64Encode(utf8.encode('$jiraEmail:$apiToken'))}';
 
     try {
+      onSubmit?.call(true);
       final response = await httpClient.post(
         issueUri,
         body: jsonEncode(body),
@@ -184,7 +188,9 @@ OnFeedbackCallback uploadToJira({
         throw HttpException(
             'Jira issue creation failed with status $statusCode');
       }
+      onSubmit?.call(false);
     } catch (e) {
+      onSubmit?.call(false);
       rethrow;
     }
   };
