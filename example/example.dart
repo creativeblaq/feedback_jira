@@ -56,6 +56,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 BetterFeedback.of(context).showAndUploadToJira(
                   domainName: 'domain-name',
                   apiToken: 'apiToken',
+                  jiraEmail: 'jiraEmail',
                 );
               },
               child: const Text('Show Feedback view'),
