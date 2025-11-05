@@ -66,3 +66,7 @@ build/
 **/ios/Flutter/flutter_export_environment.sh
 **/ios/ServiceDefinitions.json
 **/ios/Runner/GeneratedPluginRegistrant.*
+example/details.dart
+example/lib/details.dart
+/example
+/docs
