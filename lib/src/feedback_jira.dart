@@ -217,6 +217,7 @@ Map<String, dynamic> _buildBulletListFromList(List list) {
 /// See [BetterFeedbackX.showAndUploadToJira].
 /// This is just [visibleForTesting].
 @visibleForTesting
+
 /// Creates the callback that posts a Jira issue and optional attachments.
 /// Uses Jira Cloud REST v3 and ADF for description content.
 OnFeedbackCallback uploadToJira({
@@ -232,6 +233,59 @@ OnFeedbackCallback uploadToJira({
   final baseUrl = '${jiraDetails.domainName}.atlassian.net';
 
   return (UserFeedback feedback) async {
+    final String basicAuth =
+        'Basic ${base64Encode(utf8.encode('${jiraDetails.jiraEmail}:${jiraDetails.apiToken}'))}';
+
+    // Resolve assignee email to account ID if needed
+    String? resolvedAssigneeId = jiraDetails.assigneeAccountId;
+    if (resolvedAssigneeId != null && resolvedAssigneeId.contains('@')) {
+      resolvedAssigneeId = await _lookupAccountIdFromEmail(
+          resolvedAssigneeId, baseUrl, basicAuth, httpClient);
+      if (resolvedAssigneeId == null && kDebugMode) {
+        debugPrint(
+            'Could not resolve assignee email: ${jiraDetails.assigneeAccountId}');
+      }
+    }
+
+    // Resolve watcher emails to account IDs if needed
+    List<String>? resolvedWatcherIds = jiraDetails.watcherAccountIds;
+    if (resolvedWatcherIds != null && resolvedWatcherIds.isNotEmpty) {
+      final resolved = <String>[];
+      for (final id in resolvedWatcherIds) {
+        if (id.contains('@')) {
+          final accountId = await _lookupAccountIdFromEmail(
+              id, baseUrl, basicAuth, httpClient);
+          if (accountId != null) {
+            resolved.add(accountId);
+          } else if (kDebugMode) {
+            debugPrint('Could not resolve watcher email: $id');
+          }
+        } else {
+          resolved.add(id);
+        }
+      }
+      resolvedWatcherIds = resolved;
+    }
+
+    // Resolve mention emails to account IDs if needed
+    List<String>? resolvedMentionIds = jiraDetails.mentionAccountIds;
+    if (resolvedMentionIds != null && resolvedMentionIds.isNotEmpty) {
+      final resolved = <String>[];
+      for (final id in resolvedMentionIds) {
+        if (id.contains('@')) {
+          final accountId = await _lookupAccountIdFromEmail(
+              id, baseUrl, basicAuth, httpClient);
+          if (accountId != null) {
+            resolved.add(accountId);
+          } else if (kDebugMode) {
+            debugPrint('Could not resolve mention email: $id');
+          }
+        } else {
+          resolved.add(id);
+        }
+      }
+      resolvedMentionIds = resolved;
+    }
     final deviceDetailsMap =
         includeDeviceDetails ? await getDeviceDetails() : <String, dynamic>{};
 
@@ -245,6 +299,22 @@ OnFeedbackCallback uploadToJira({
         }
       ]
     });
+
+    // Add user mentions if specified
+    if (resolvedMentionIds != null && resolvedMentionIds.isNotEmpty) {
+      final mentionContent = <Map<String, dynamic>>[];
+      for (final accountId in resolvedMentionIds.toSet()) {
+        mentionContent.add({
+          "type": "mention",
+          "attrs": {"id": accountId}
+        });
+        mentionContent.add({"text": " ", "type": "text"});
+      }
+      contentMap.add({
+        "type": "paragraph",
+        "content": mentionContent,
+      });
+    }
 
     if (includeDeviceDetails && deviceDetailsMap.isNotEmpty) {
       contentMap.add({"type": "rule"});
@@ -321,11 +391,10 @@ OnFeedbackCallback uploadToJira({
         if (jiraDetails.parentKey != null)
           "parent": {"key": jiraDetails.parentKey},
         if (jiraDetails.labels != null) "labels": jiraDetails.labels,
+        if (resolvedAssigneeId != null) "assignee": {"id": resolvedAssigneeId},
       }
     };
     final issueUri = Uri.https(baseUrl, '/rest/api/3/issue');
-    final String basicAuth =
-        'Basic ${base64Encode(utf8.encode('${jiraDetails.jiraEmail}:${jiraDetails.apiToken}'))}';
 
     try {
       onSubmit?.call(true);
@@ -358,6 +427,38 @@ OnFeedbackCallback uploadToJira({
                 basicAuth,
                 feedback.screenshot,
                 'screenshot-${DateTime.now().millisecondsSinceEpoch}.png');
+          }
+          if (resolvedWatcherIds != null && resolvedWatcherIds.isNotEmpty) {
+            final watchersUri =
+                Uri.https(baseUrl, '/rest/api/3/issue/$ticketId/watchers');
+            for (final accountId in resolvedWatcherIds.toSet()) {
+              try {
+                final watcherResponse = await httpClient.post(
+                  watchersUri,
+                  body: jsonEncode(accountId),
+                  headers: {
+                    HttpHeaders.contentTypeHeader: 'application/json',
+                    HttpHeaders.acceptHeader: 'application/json',
+                    HttpHeaders.authorizationHeader: basicAuth,
+                  },
+                );
+                if (watcherResponse.statusCode < 200 ||
+                    watcherResponse.statusCode >= 400) {
+                  final errorBody = utf8.decode(watcherResponse.bodyBytes);
+                  if (kDebugMode) {
+                    debugPrint(
+                        'Failed to add watcher $accountId: ${watcherResponse.statusCode}');
+                    debugPrint('Error details: $errorBody');
+                  }
+                  // Continue with other watchers instead of failing completely
+                }
+              } catch (e) {
+                if (kDebugMode) {
+                  debugPrint('Exception adding watcher $accountId: $e');
+                }
+                // Continue with remaining watchers
+              }
+            }
           }
         } catch (e) {
           rethrow;
@@ -413,6 +514,40 @@ Future<String> uploadAttachmentFromUint8List(
   }
 }
 
+/// Looks up a Jira user's account ID from their email address.
+/// Returns the account ID if found, or null if not found or on error.
+Future<String?> _lookupAccountIdFromEmail(
+    String email, String baseUrl, String basicAuth, http.Client client) async {
+  try {
+    final userSearchUri =
+        Uri.https(baseUrl, '/rest/api/3/user/search', {'query': email.trim()});
+    final response = await client.get(
+      userSearchUri,
+      headers: {
+        HttpHeaders.acceptHeader: 'application/json',
+        HttpHeaders.authorizationHeader: basicAuth,
+      },
+    );
+
+    if (response.statusCode >= 200 && response.statusCode < 400) {
+      final users = jsonDecode(utf8.decode(response.bodyBytes)) as List;
+      if (users.isNotEmpty) {
+        final user = users.first as Map<String, dynamic>;
+        return user['accountId'] as String?;
+      }
+    }
+    if (kDebugMode) {
+      debugPrint('Failed to lookup account ID for email: $email');
+    }
+    return null;
+  } catch (e) {
+    if (kDebugMode) {
+      debugPrint('Error looking up account ID for $email: $e');
+    }
+    return null;
+  }
+}
+
 /// Collects app and device details to include in the Jira description.
 Future<Map<String, dynamic>> getDeviceDetails() async {
   PackageInfo packageInfo = await PackageInfo.fromPlatform();
@@ -464,6 +599,13 @@ Future<Map<String, dynamic>> getDeviceDetails() async {
 /// - `issueType`: Issue type name (e.g., 'Bug', 'Task').
 /// - `parentKey`: Parent issue key for sub-tasks (optional).
 /// - `labels`: Labels to apply (optional).
+/// - `assigneeAccountId`: Account ID or email of the assignee (optional).
+///   If an email is provided, it will be automatically resolved to an account ID.
+/// - `watcherAccountIds`: Account IDs or emails to add as watchers (optional).
+///   If emails are provided, they will be automatically resolved to account IDs.
+/// - `mentionAccountIds`: Account IDs or emails to mention in the description (optional).
+///   Users will be @mentioned and receive notifications. If emails are provided,
+///   they will be automatically resolved to account IDs.
 class JiraDetails {
   final String domainName;
   final String apiToken;
@@ -472,6 +614,9 @@ class JiraDetails {
   final String issueType;
   final String? parentKey;
   final List<String>? labels;
+  final String? assigneeAccountId;
+  final List<String>? watcherAccountIds;
+  final List<String>? mentionAccountIds;
 
   JiraDetails(
       {required this.domainName,
@@ -480,5 +625,8 @@ class JiraDetails {
       required this.projectKey,
       this.issueType = 'Bug',
       this.parentKey,
-      this.labels});
+      this.labels,
+      this.assigneeAccountId,
+      this.watcherAccountIds,
+      this.mentionAccountIds});
 }
