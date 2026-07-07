@@ -70,21 +70,50 @@ extension BetterFeedbackX on FeedbackController {
   bool get visible => isVisible;
 }
 
-/// Build an ADF paragraph node with a bold `label` prefix and a text `value`.
-Map<String, dynamic> _createParagraph(String label, String value) {
-  List<Map<String, dynamic>> content = [];
-  if (label.isNotEmpty) {
-    content.add({
-      "text": "$label: ",
-      "type": "text",
-      "marks": [
+/// Converts an arbitrary [raw] string into a list of ADF inline nodes that are
+/// safe for Jira's strict ADF validator.
+///
+/// ADF `text` nodes MUST NOT contain newline characters and MUST NOT be empty.
+/// This helper:
+///  - normalizes `\r\n` and `\r` to `\n`,
+///  - splits on `\n`,
+///  - emits a `{"type":"text","text": <line>}` node for each non-blank line,
+///  - inserts a `{"type":"hardBreak"}` between consecutive emitted lines, and
+///  - returns `[]` for an all-empty/whitespace input so callers can skip
+///    emitting an empty paragraph/bullet item.
+///
+/// When [bold] is true each text node carries a `strong` mark.
+List<Map<String, dynamic>> _inlineTextNodes(String raw, {bool bold = false}) {
+  final normalized = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+  final nodes = <Map<String, dynamic>>[];
+  for (final line in normalized.split('\n')) {
+    if (line.trim().isEmpty) continue;
+    if (nodes.isNotEmpty) {
+      nodes.add({"type": "hardBreak"});
+    }
+    final Map<String, dynamic> node = {"type": "text", "text": line};
+    if (bold) {
+      node["marks"] = [
         {"type": "strong"}
-      ]
-    });
+      ];
+    }
+    nodes.add(node);
   }
+  return nodes;
+}
 
-  content.add({"text": " $value", "type": "text"});
+/// Build an ADF paragraph node with a bold `label` prefix and a text `value`.
+///
+/// Returns `null` when both label and value are empty/whitespace so callers can
+/// avoid emitting an empty paragraph (which strict ADF validation rejects).
+Map<String, dynamic>? _createParagraph(String label, String value) {
+  final content = <Map<String, dynamic>>[];
+  if (label.isNotEmpty) {
+    content.addAll(_inlineTextNodes("$label: ", bold: true));
+  }
+  content.addAll(_inlineTextNodes(value));
 
+  if (content.isEmpty) return null;
   return {
     "type": "paragraph",
     "content": content,
@@ -97,120 +126,99 @@ void _appendCustomParagraphs(
     String key, dynamic value, List<Map<String, dynamic>> out, int depth) {
   final indent = depth > 0 ? List.filled(depth, '  ').join() : '';
   if (value is Map) {
-    out.add({
-      "type": "paragraph",
-      "content": [
-        {
-          "text": "$indent$key",
-          "type": "text",
-          "marks": [
-            {"type": "strong"}
-          ]
-        }
-      ]
-    });
+    final header = _inlineTextNodes("$indent$key", bold: true);
+    if (header.isNotEmpty) {
+      out.add({"type": "paragraph", "content": header});
+    }
     value.forEach((k, v) {
       _appendCustomParagraphs(k.toString(), v, out, depth + 1);
     });
   } else if (value is List) {
-    out.add({
-      "type": "paragraph",
-      "content": [
-        {
-          "text": "$indent$key",
-          "type": "text",
-          "marks": [
-            {"type": "strong"}
-          ]
-        }
-      ]
-    });
+    final header = _inlineTextNodes("$indent$key", bold: true);
+    if (header.isNotEmpty) {
+      out.add({"type": "paragraph", "content": header});
+    }
     for (int i = 0; i < value.length; i++) {
-      _appendCustomParagraphs('[${i}]', value[i], out, depth + 1);
+      _appendCustomParagraphs('[$i]', value[i], out, depth + 1);
     }
   } else {
-    out.add(_createParagraph("$indent$key", value?.toString() ?? 'null'));
+    final paragraph =
+        _createParagraph("$indent$key", value?.toString() ?? 'null');
+    if (paragraph != null) out.add(paragraph);
   }
 }
 
-/// Helper to create an ADF text node. When `bold` is true, adds strong mark.
-Map<String, dynamic> _textNode(String text, {bool bold = false}) {
-  final Map<String, dynamic> node = {"text": text, "type": "text"};
-  if (bold)
-    node["marks"] = [
-      {"type": "strong"}
-    ];
-  return node;
-}
-
-/// Helper to create a single-paragraph node with one text child.
-Map<String, dynamic> _paragraphNode(String text, {bool bold = false}) {
+/// Helper to create a single-paragraph node whose text is split into
+/// ADF-safe inline nodes (see [_inlineTextNodes]).
+///
+/// Returns `null` when [text] is empty/whitespace so callers can skip emitting
+/// an empty paragraph.
+Map<String, dynamic>? _paragraphNode(String text, {bool bold = false}) {
+  final content = _inlineTextNodes(text, bold: bold);
+  if (content.isEmpty) return null;
   return {
     "type": "paragraph",
-    "content": [_textNode(text, bold: bold)]
+    "content": content,
   };
 }
 
 /// Builds a hierarchical bullet list ADF node from a Map.
-Map<String, dynamic> _buildBulletListFromMap(Map map) {
+/// Returns `null` when the list would have no items (an empty `bulletList` is
+/// invalid ADF).
+Map<String, dynamic>? _buildBulletListFromMap(Map map) {
   final List<Map<String, dynamic>> items = [];
   map.forEach((k, v) {
+    final content = <Map<String, dynamic>>[];
     if (v is Map) {
-      items.add({
-        "type": "listItem",
-        "content": [
-          _paragraphNode(k.toString(), bold: true),
-          _buildBulletListFromMap(v)
-        ]
-      });
+      final header = _paragraphNode(k.toString(), bold: true);
+      if (header != null) content.add(header);
+      final nested = _buildBulletListFromMap(v);
+      if (nested != null) content.add(nested);
     } else if (v is List) {
-      items.add({
-        "type": "listItem",
-        "content": [
-          _paragraphNode(k.toString(), bold: true),
-          _buildBulletListFromList(v)
-        ]
-      });
+      final header = _paragraphNode(k.toString(), bold: true);
+      if (header != null) content.add(header);
+      final nested = _buildBulletListFromList(v);
+      if (nested != null) content.add(nested);
     } else {
-      items.add({
-        "type": "listItem",
-        "content": [
-          _paragraphNode("${k.toString()}: ${v?.toString() ?? 'null'}")
-        ]
-      });
+      final leaf =
+          _paragraphNode("${k.toString()}: ${v?.toString() ?? 'null'}");
+      if (leaf != null) content.add(leaf);
+    }
+    if (content.isNotEmpty) {
+      items.add({"type": "listItem", "content": content});
     }
   });
+  if (items.isEmpty) return null;
   return {"type": "bulletList", "content": items};
 }
 
 /// Builds a hierarchical bullet list ADF node from a List.
-Map<String, dynamic> _buildBulletListFromList(List list) {
+/// Returns `null` when the list would have no items (an empty `bulletList` is
+/// invalid ADF).
+Map<String, dynamic>? _buildBulletListFromList(List list) {
   final List<Map<String, dynamic>> items = [];
   for (int i = 0; i < list.length; i++) {
     final v = list[i];
+    final content = <Map<String, dynamic>>[];
     if (v is Map) {
-      items.add({
-        "type": "listItem",
-        "content": [
-          _paragraphNode("[${i}]", bold: true),
-          _buildBulletListFromMap(v)
-        ]
-      });
+      final header = _paragraphNode("[$i]", bold: true);
+      if (header != null) content.add(header);
+      final nested = _buildBulletListFromMap(v);
+      if (nested != null) content.add(nested);
     } else if (v is List) {
-      items.add({
-        "type": "listItem",
-        "content": [
-          _paragraphNode("[${i}]", bold: true),
-          _buildBulletListFromList(v)
-        ]
-      });
+      final header = _paragraphNode("[$i]", bold: true);
+      if (header != null) content.add(header);
+      final nested = _buildBulletListFromList(v);
+      if (nested != null) content.add(nested);
     } else {
-      items.add({
-        "type": "listItem",
-        "content": [_paragraphNode("[${i}]: ${v?.toString() ?? 'null'}")]
-      });
+      final leaf = _paragraphNode("[$i]: ${v?.toString() ?? 'null'}");
+      if (leaf != null) content.add(leaf);
+    }
+    if (content.isNotEmpty) {
+      items.add({"type": "listItem", "content": content});
     }
   }
+  if (items.isEmpty) return null;
   return {"type": "bulletList", "content": items};
 }
 
@@ -239,8 +247,9 @@ OnFeedbackCallback uploadToJira({
     // Resolve assignee email to account ID if needed
     String? resolvedAssigneeId = jiraDetails.assigneeAccountId;
     if (resolvedAssigneeId != null && resolvedAssigneeId.contains('@')) {
-      resolvedAssigneeId = await _lookupAccountIdFromEmail(
+      final lookup = await _lookupAccountIdFromEmail(
           resolvedAssigneeId, baseUrl, basicAuth, httpClient);
+      resolvedAssigneeId = lookup?.accountId;
       if (resolvedAssigneeId == null && kDebugMode) {
         debugPrint(
             'Could not resolve assignee email: ${jiraDetails.assigneeAccountId}');
@@ -253,10 +262,10 @@ OnFeedbackCallback uploadToJira({
       final resolved = <String>[];
       for (final id in resolvedWatcherIds) {
         if (id.contains('@')) {
-          final accountId = await _lookupAccountIdFromEmail(
+          final lookup = await _lookupAccountIdFromEmail(
               id, baseUrl, basicAuth, httpClient);
-          if (accountId != null) {
-            resolved.add(accountId);
+          if (lookup != null) {
+            resolved.add(lookup.accountId);
           } else if (kDebugMode) {
             debugPrint('Could not resolve watcher email: $id');
           }
@@ -267,16 +276,22 @@ OnFeedbackCallback uploadToJira({
       resolvedWatcherIds = resolved;
     }
 
-    // Resolve mention emails to account IDs if needed
+    // Resolve mention emails to account IDs if needed. Track any resolved
+    // display names so mention nodes can carry a friendly `text` attr.
+    final mentionDisplayNames = <String, String>{};
     List<String>? resolvedMentionIds = jiraDetails.mentionAccountIds;
     if (resolvedMentionIds != null && resolvedMentionIds.isNotEmpty) {
       final resolved = <String>[];
       for (final id in resolvedMentionIds) {
         if (id.contains('@')) {
-          final accountId = await _lookupAccountIdFromEmail(
+          final lookup = await _lookupAccountIdFromEmail(
               id, baseUrl, basicAuth, httpClient);
-          if (accountId != null) {
-            resolved.add(accountId);
+          if (lookup != null) {
+            resolved.add(lookup.accountId);
+            final name = lookup.displayName;
+            if (name != null && name.trim().isNotEmpty) {
+              mentionDisplayNames[lookup.accountId] = name.trim();
+            }
           } else if (kDebugMode) {
             debugPrint('Could not resolve mention email: $id');
           }
@@ -290,25 +305,26 @@ OnFeedbackCallback uploadToJira({
         includeDeviceDetails ? await getDeviceDetails() : <String, dynamic>{};
 
     var contentMap = <Map<String, dynamic>>[];
-    contentMap.add({
-      "type": "paragraph",
-      "content": [
-        {
-          "text": '${feedback.text}\n\n',
-          "type": "text",
-        }
-      ]
-    });
+    final feedbackNodes = _inlineTextNodes(feedback.text);
+    if (feedbackNodes.isNotEmpty) {
+      contentMap.add({
+        "type": "paragraph",
+        "content": feedbackNodes,
+      });
+    }
 
     // Add user mentions if specified
     if (resolvedMentionIds != null && resolvedMentionIds.isNotEmpty) {
       final mentionContent = <Map<String, dynamic>>[];
       for (final accountId in resolvedMentionIds.toSet()) {
+        final name = mentionDisplayNames[accountId];
+        final mentionText =
+            (name != null && name.isNotEmpty) ? '@$name' : '@user';
         mentionContent.add({
           "type": "mention",
-          "attrs": {"id": accountId}
+          "attrs": {"id": accountId, "text": mentionText}
         });
-        mentionContent.add({"text": " ", "type": "text"});
+        mentionContent.add({"type": "text", "text": " "});
       }
       contentMap.add({
         "type": "paragraph",
@@ -327,7 +343,8 @@ OnFeedbackCallback uploadToJira({
       });
 
       deviceDetailsMap.forEach((key, value) {
-        contentMap.add(_createParagraph(key, value));
+        final paragraph = _createParagraph(key, value?.toString() ?? 'null');
+        if (paragraph != null) contentMap.add(paragraph);
       });
     }
 
@@ -346,7 +363,8 @@ OnFeedbackCallback uploadToJira({
           _appendCustomParagraphs(key, value, contentMap, 0);
         });
       } else if (customBodyFormat == JiraCustomBodyFormat.bullets) {
-        contentMap.add(_buildBulletListFromMap(customBody));
+        final bulletList = _buildBulletListFromMap(customBody);
+        if (bulletList != null) contentMap.add(bulletList);
       } else if (customBodyFormat == JiraCustomBodyFormat.codeBlock) {
         final encoder = const JsonEncoder.withIndent('  ');
         final jsonStr = encoder.convert(customBody);
@@ -359,7 +377,8 @@ OnFeedbackCallback uploadToJira({
         });
       } else if (customBodyFormat == JiraCustomBodyFormat.hybrid) {
         // Bullets for quick scan
-        contentMap.add(_buildBulletListFromMap(customBody));
+        final bulletList = _buildBulletListFromMap(customBody);
+        if (bulletList != null) contentMap.add(bulletList);
         // Divider and full JSON for exact fidelity
         contentMap.add({"type": "rule"});
         final encoder = const JsonEncoder.withIndent('  ');
@@ -372,6 +391,17 @@ OnFeedbackCallback uploadToJira({
           ]
         });
       }
+    }
+
+    // A `doc` with an empty content array is invalid ADF; ensure at least one
+    // block node is present (e.g. empty feedback with no device/custom data).
+    if (contentMap.isEmpty) {
+      contentMap.add({
+        "type": "paragraph",
+        "content": [
+          {"type": "text", "text": "No description provided."}
+        ]
+      });
     }
 
     Map<String, dynamic> descriptionMap = {
@@ -514,9 +544,10 @@ Future<String> uploadAttachmentFromUint8List(
   }
 }
 
-/// Looks up a Jira user's account ID from their email address.
-/// Returns the account ID if found, or null if not found or on error.
-Future<String?> _lookupAccountIdFromEmail(
+/// Looks up a Jira user from their email address.
+/// Returns the account ID and (when present) display name if found, or null if
+/// not found or on error.
+Future<({String accountId, String? displayName})?> _lookupAccountIdFromEmail(
     String email, String baseUrl, String basicAuth, http.Client client) async {
   try {
     final userSearchUri =
@@ -533,7 +564,13 @@ Future<String?> _lookupAccountIdFromEmail(
       final users = jsonDecode(utf8.decode(response.bodyBytes)) as List;
       if (users.isNotEmpty) {
         final user = users.first as Map<String, dynamic>;
-        return user['accountId'] as String?;
+        final accountId = user['accountId'] as String?;
+        if (accountId != null) {
+          return (
+            accountId: accountId,
+            displayName: user['displayName'] as String?,
+          );
+        }
       }
     }
     if (kDebugMode) {
